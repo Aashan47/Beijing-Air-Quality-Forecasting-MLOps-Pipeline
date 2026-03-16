@@ -248,10 +248,9 @@ async def forecast(
 # Serve frontend (for local development — in production nginx handles this)
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
 
+if os.path.isdir(FRONTEND_DIR):
+    @app.get("/")
+    async def serve_index():
+        return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
 
-@app.get("/")
-async def serve_index():
-    return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
-
-
-app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
+    app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
