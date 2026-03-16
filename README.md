@@ -34,118 +34,40 @@ A production-grade MLOps platform that ingests real-time air quality and weather
 
 ## System Architecture
 
-```
-+-----------------------------------------------------------------------------------+
-|                              DATA LAYER (Open-Meteo API)                          |
-|  Air Quality API ──── PM2.5 (hourly, 9-point Beijing grid)                       |
-|  Weather Archive ──── Temperature, Humidity, Wind Speed (historical)              |
-|  Weather Forecast ─── Temperature, Humidity, Wind Speed (7-day ahead)             |
-+-----------------------------------------------------------------------------------+
-          |                                           |
-          v                                           v
-+-------------------+                    +----------------------------+
-|   INGESTION       |                    |   REAL-TIME INFERENCE      |
-|   (Airflow DAG)   |                    |   (FastAPI on EC2)         |
-|                   |                    |                            |
-|  fetch_air_quality|                    |  /predict ── single point  |
-|  9 grid points    |                    |  /predict-grid ── heatmap  |
-|  90-day backfill  |                    |  /forecast ── 1-7 day      |
-+-------------------+                    +----------------------------+
-          |                                           |
-          v                                           v
-+-----------------------------------------------------------------------------------+
-|                            AWS S3 DATA LAKE                                       |
-|                                                                                   |
-|  raw/YYYY-MM-DD/*.parquet          Ingested air quality + weather data            |
-|  features/training_dataset.parquet  Engineered features with PM2.5 lags           |
-|  features/csv/train/                CSV format for SageMaker built-in algo         |
-|  models/model.tar.gz               Current production model                       |
-|  models/latest_metrics.json         RMSE, MAE, R² scores                          |
-|  predictions/YYYY-MM-DD/*.parquet   Logged API predictions (90-day retention)      |
-|  monitoring/drift_report_*.html     Evidently drift analysis reports               |
-+-----------------------------------------------------------------------------------+
-          |                                           ^
-          v                                           |
-+-------------------+    +----------------+    +-------------------+
-| FEATURE           |    |   SAGEMAKER    |    |   DRIFT           |
-| ENGINEERING       |--->|   TRAINING     |--->|   DETECTION       |
-|                   |    |                |    |                   |
-| Temporal lags:    |    | Script Mode    |    | Evidently AI      |
-|  pm25_lag_1h      |    | XGBoost        |    | DataDriftPreset   |
-|  pm25_lag_3h      |    | ml.m5.xlarge   |    | PSI method        |
-|  pm25_rolling_3h  |    | Auto-register  |    | >50% cols drifted |
-| Time features:    |    | in Model       |    | → trigger retrain |
-|  hour, day_of_wk  |    | Registry       |    |                   |
-|  is_rush_hour     |    +----------------+    +-------------------+
-+-------------------+           |
-                                v
-                    +------------------------+
-                    |  SAGEMAKER MODEL       |
-                    |  REGISTRY              |
-                    |                        |
-                    |  RMSE < 15.0 → Auto-   |
-                    |    approved             |
-                    |  RMSE >= 15.0 → Pending |
-                    |    manual approval      |
-                    +------------------------+
-```
+<p align="center">
+  <img src="architecture-diagrams/High Level Platform Architecture.png" alt="High-Level Platform Architecture" width="600">
+</p>
 
-### Airflow DAG Pipeline (Every 6 Hours)
+The platform follows a layered architecture — data flows from Open-Meteo APIs through ingestion, feature engineering, and SageMaker training, into a FastAPI prediction service backed by an S3 data lake, and surfaces on an interactive map dashboard.
+
+### S3 Data Lake Structure
 
 ```
- fetch_data ──> build_features ──> check_drift ──> branch_on_drift
-                                                        |
-                                          +-------------+-------------+
-                                          |                           |
-                                   drift detected              no drift
-                                   OR Sunday                        |
-                                          |                         v
-                                          v                       [end]
-                                   trigger_training
-                                          |
-                                          v
-                                   evaluate_model
-                                          |
-                                          v
-                                update_model_version
-                                          |
-                                          v
-                                        [end]
+s3://air-quality-mlops-data/
+├── raw/YYYY-MM-DD/*.parquet            Ingested PM2.5 + weather data
+├── features/training_dataset.parquet   Engineered features with PM2.5 lags
+├── models/
+│   ├── model.tar.gz                    Current production model
+│   └── latest_metrics.json             RMSE, MAE, R² scores
+├── predictions/YYYY-MM-DD/*.parquet    Logged API predictions (90-day retention)
+└── monitoring/drift_report_*.html      Evidently drift analysis reports
 ```
 
-### Docker Deployment Architecture (EC2)
+### Automated MLOps Pipeline
 
-```
-+------------------------------------------------------------------+
-|                        EC2 INSTANCE                               |
-|                                                                   |
-|  +------------------+  +------------------+  +-----------------+  |
-|  |  FastAPI (API)   |  |  Nginx           |  |  PostgreSQL     |  |
-|  |  Port 8000       |  |  (Frontend)      |  |  (Airflow DB)   |  |
-|  |                  |  |  Port 80         |  |  Internal only  |  |
-|  |  - /predict      |  |                  |  |                 |  |
-|  |  - /predict-grid |  |  Leaflet.js Map  |  +-----------------+  |
-|  |  - /forecast     |  |  + Chart.js      |                      |
-|  |  - /health       |  |  + AQI Legend    |  +-----------------+  |
-|  +------------------+  +------------------+  |  Airflow        |  |
-|                                              |  Webserver      |  |
-|  +------------------------------------------+  Port 8080       |  |
-|  |  Airflow Scheduler                       |                 |  |
-|  |  Triggers DAG every 6 hours              +-----------------+  |
-|  |  Manages ingestion → train → deploy                           |
-|  +---------------------------------------------------------------+
-|                           |                                       |
-+------------------------------------------------------------------+
-                            |
-              +-------------+-------------+
-              |                           |
-              v                           v
-     +----------------+        +-------------------+
-     |  AWS S3         |        |  AWS SageMaker    |
-     |  Data Lake      |        |  Training Jobs    |
-     |                 |        |  Model Registry   |
-     +----------------+        +-------------------+
-```
+<p align="center">
+  <img src="architecture-diagrams/Automated MLOps Pipeline.png" alt="Automated MLOps Pipeline" width="500">
+</p>
+
+The Airflow DAG runs **every 6 hours**, orchestrating the full cycle: data ingestion, feature engineering, drift detection, conditional retraining on SageMaker, model evaluation against the RMSE threshold, and model registry updates.
+
+### AWS Infrastructure Architecture
+
+<p align="center">
+  <img src="architecture-diagrams/AWS Infrastructure Architecture.png" alt="AWS Infrastructure Architecture" width="700">
+</p>
+
+All application services (FastAPI, Nginx frontend, Airflow, PostgreSQL) run as Docker containers on a single EC2 instance. SageMaker handles training jobs on-demand, the Model Registry tracks model versions, and S3 serves as the central data lake connecting all components.
 
 ---
 
@@ -477,6 +399,14 @@ The interactive frontend provides:
 - **Auto-refresh** — Updates every 5 minutes and on map pan/zoom
 - **API health status** — Live connection indicator
 
+### Real-Time Prediction Flow
+
+<p align="center">
+  <img src="architecture-diagrams/Real-Time Prediction Flow.png" alt="Real-Time Prediction Flow" width="750">
+</p>
+
+When a user opens the dashboard, the frontend requests grid predictions from FastAPI, which loads the latest model from S3, generates spatial PM2.5 predictions using current weather data, logs each prediction asynchronously, and returns results to render the heatmap.
+
 ---
 
 ## AWS IAM Requirements
@@ -539,11 +469,6 @@ All settings are managed via environment variables or `.env` file, loaded by Pyd
 | `LOG_BUFFER_SIZE` | `100` | Prediction log buffer size |
 | `LOG_FLUSH_INTERVAL_SECONDS` | `60` | Log flush interval |
 
----
-
-## License
-
-This project is for educational and research purposes.
 
 ---
 
