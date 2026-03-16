@@ -1,0 +1,28 @@
+# Core ML
+pandas>=2.2
+numpy>=1.26
+scikit-learn>=1.5
+xgboost>=2.1
+pyarrow>=18.0
+
+# AWS
+boto3>=1.35
+sagemaker>=2.232
+
+# API
+fastapi>=0.115
+uvicorn>=0.34
+pydantic>=2.10
+pydantic-settings>=2.7
+httpx>=0.28
+
+# Monitoring
+evidently>=0.5
+
+# Utilities
+python-dotenv>=1.0
+loguru>=0.7
+tenacity>=9.0
+
+# Orchestration (installed only in Docker — requires Python 3.11)
+# apache-airflow==2.10.4

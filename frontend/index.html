@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Beijing Air Quality Dashboard</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #e2e8f0; }
+
+        .dashboard { display: grid; grid-template-columns: 340px 1fr; grid-template-rows: auto 1fr 260px; height: 100vh; }
+
+        /* Header */
+        .header {
+            grid-column: 1 / -1;
+            background: #1e293b;
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid #334155;
+        }
+        .header h1 { font-size: 20px; font-weight: 600; color: #f1f5f9; }
+        .header h1 span { color: #38bdf8; }
+        .header-right { display: flex; align-items: center; gap: 16px; font-size: 13px; color: #94a3b8; }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; display: inline-block; margin-right: 6px; }
+        .status-dot.error { background: #ef4444; }
+
+        /* Sidebar */
+        .sidebar {
+            background: #1e293b;
+            padding: 20px;
+            overflow-y: auto;
+            border-right: 1px solid #334155;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .card {
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 12px;
+            padding: 16px;
+        }
+        .card-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #64748b; margin-bottom: 10px; }
+
+        /* Stats */
+        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .stat-box { text-align: center; }
+        .stat-value { font-size: 28px; font-weight: 700; line-height: 1.2; }
+        .stat-label { font-size: 11px; color: #64748b; margin-top: 2px; }
+
+        .aqi-good { color: #22c55e; }
+        .aqi-moderate { color: #eab308; }
+        .aqi-usg { color: #f97316; }
+        .aqi-unhealthy { color: #ef4444; }
+        .aqi-very-unhealthy { color: #a855f7; }
+        .aqi-hazardous { color: #be123c; }
+
+        /* AQI Bar */
+        .aqi-bar {
+            height: 8px;
+            border-radius: 4px;
+            background: linear-gradient(to right, #22c55e 0%, #22c55e 5%, #eab308 14%, #f97316 22%, #ef4444 60%, #a855f7 80%, #be123c 100%);
+            position: relative;
+            margin-top: 12px;
+        }
+        .aqi-marker {
+            position: absolute;
+            top: -4px;
+            width: 16px; height: 16px;
+            background: white;
+            border: 2px solid #0f172a;
+            border-radius: 50%;
+            transform: translateX(-50%);
+            transition: left 0.5s ease;
+        }
+        .aqi-labels { display: flex; justify-content: space-between; font-size: 10px; color: #64748b; margin-top: 6px; }
+
+        /* Legend */
+        .legend-item { display: flex; align-items: center; margin-bottom: 6px; font-size: 13px; }
+        .legend-dot { width: 12px; height: 12px; border-radius: 3px; margin-right: 10px; flex-shrink: 0; }
+
+        /* Model info */
+        .info-row { display: flex; justify-content: space-between; font-size: 13px; padding: 6px 0; border-bottom: 1px solid #1e293b; }
+        .info-row:last-child { border: none; }
+        .info-label { color: #64748b; }
+        .info-value { color: #cbd5e1; font-weight: 500; }
+
+        /* Map */
+        .map-container { position: relative; }
+        #map { width: 100%; height: 100%; }
+
+        /* Loading overlay */
+        #loading {
+            display: none;
+            position: absolute;
+            top: 16px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(15, 23, 42, 0.9);
+            color: #38bdf8;
+            padding: 10px 24px;
+            border-radius: 24px;
+            z-index: 1000;
+            font-size: 13px;
+            border: 1px solid #334155;
+            backdrop-filter: blur(8px);
+        }
+        .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #334155; border-top-color: #38bdf8; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; vertical-align: middle; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Click hint */
+        .map-hint {
+            position: absolute;
+            bottom: 16px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(15, 23, 42, 0.85);
+            color: #94a3b8;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 12px;
+            z-index: 1000;
+            pointer-events: none;
+        }
+
+        /* Leaflet popup override */
+        .leaflet-popup-content-wrapper { background: #1e293b; color: #e2e8f0; border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
+        .leaflet-popup-tip { background: #1e293b; }
+        .leaflet-popup-content { font-family: inherit; font-size: 13px; line-height: 1.6; }
+        .popup-pm25 { font-size: 22px; font-weight: 700; }
+        .popup-category { font-size: 12px; padding: 2px 8px; border-radius: 10px; display: inline-block; margin-top: 4px; }
+
+        /* Forecast Panel */
+        .forecast-panel {
+            grid-column: 1 / -1;
+            background: #1e293b;
+            border-top: 1px solid #334155;
+            padding: 16px 24px;
+            display: flex;
+            flex-direction: column;
+        }
+        .forecast-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+        }
+        .forecast-header h3 { font-size: 14px; color: #f1f5f9; font-weight: 600; }
+        .forecast-tabs {
+            display: flex;
+            gap: 6px;
+        }
+        .forecast-tab {
+            padding: 4px 14px;
+            border-radius: 16px;
+            border: 1px solid #334155;
+            background: transparent;
+            color: #94a3b8;
+            cursor: pointer;
+            font-size: 12px;
+            font-family: inherit;
+            transition: all 0.2s;
+        }
+        .forecast-tab:hover { border-color: #64748b; color: #e2e8f0; }
+        .forecast-tab.active { background: #38bdf8; border-color: #38bdf8; color: #0f172a; font-weight: 600; }
+        .forecast-chart-container {
+            flex: 1;
+            position: relative;
+        }
+        .forecast-loading {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #64748b;
+            font-size: 13px;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .dashboard { grid-template-columns: 1fr; grid-template-rows: auto auto 1fr 200px; }
+            .sidebar { flex-direction: row; overflow-x: auto; padding: 12px; gap: 12px; border-right: none; border-bottom: 1px solid #334155; }
+            .card { min-width: 200px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard">
+        <!-- Header -->
+        <div class="header">
+            <h1><span>Beijing</span> Air Quality Dashboard</h1>
+            <div class="header-right">
+                <span><span class="status-dot" id="api-status"></span> <span id="api-status-text">Connecting...</span></span>
+                <span id="last-updated"></span>
+            </div>
+        </div>
+
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <!-- Prediction Time Card -->
+            <div class="card" style="background: linear-gradient(135deg, #1e3a5f 0%, #0f172a 100%); border-color: #38bdf8;">
+                <div class="card-title" style="color:#38bdf8;">Prediction For</div>
+                <div id="prediction-date" style="font-size: 22px; font-weight: 700; color: #f1f5f9;">--</div>
+                <div id="prediction-time" style="font-size: 32px; font-weight: 700; color: #38bdf8; margin: 4px 0;">--:--</div>
+                <div id="prediction-tz" style="font-size: 12px; color: #64748b;">Next hour forecast (UTC+8 Beijing)</div>
+            </div>
+
+            <!-- Current AQI Card -->
+            <div class="card">
+                <div class="card-title">Current Air Quality (City Average)</div>
+                <div class="stat-grid">
+                    <div class="stat-box">
+                        <div class="stat-value" id="avg-pm25">--</div>
+                        <div class="stat-label">PM2.5 (&micro;g/m&sup3;)</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-value" id="avg-category" style="font-size:16px;">--</div>
+                        <div class="stat-label">AQI Category</div>
+                    </div>
+                </div>
+                <div class="aqi-bar">
+                    <div class="aqi-marker" id="aqi-marker"></div>
+                </div>
+                <div class="aqi-labels">
+                    <span>Good</span><span>Moderate</span><span>Unhealthy</span><span>Hazardous</span>
+                </div>
+            </div>
+
+            <!-- About Card -->
+            <div class="card" style="border-color: #334155;">
+                <div class="card-title">About the Dashboard</div>
+                <div style="font-size: 12px; color: #94a3b8; line-height: 1.8;">
+                    <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+                        <span style="color:#22c55e;">&#9679;</span>
+                        <span>Data ingestion runs every <b style="color:#e2e8f0;">6 hours</b></span>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+                        <span style="color:#f97316;">&#9679;</span>
+                        <span>Auto-retrain on <b style="color:#e2e8f0;">data drift</b> or weekly</span>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <span style="color:#eab308;">&#9679;</span>
+                        <span>Predictions update in <b style="color:#e2e8f0;">real-time</b></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Legend Card -->
+            <div class="card">
+                <div class="card-title">PM2.5 AQI Scale</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#22c55e"></div> Good (0-12)</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#eab308"></div> Moderate (12-35)</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#f97316"></div> USG (35-55)</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#ef4444"></div> Unhealthy (55-150)</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#a855f7"></div> Very Unhealthy (150-250)</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#be123c"></div> Hazardous (250+)</div>
+            </div>
+
+            <!-- Dynamic Range Card -->
+            <div class="card">
+                <div class="card-title">Heatmap Range (Current View)</div>
+                <div style="height:12px; border-radius:6px; margin:8px 0;" id="dynamic-gradient"></div>
+                <div style="display:flex; justify-content:space-between; font-size:11px; color:#94a3b8;">
+                    <span id="range-min">--</span>
+                    <span id="range-max">--</span>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Map -->
+        <div class="map-container">
+            <div id="map"></div>
+            <div id="loading"><span class="spinner"></span>Loading predictions...</div>
+            <div class="map-hint">Click anywhere on the map for a point prediction</div>
+        </div>
+
+        <!-- Forecast Panel -->
+        <div class="forecast-panel">
+            <div class="forecast-header">
+                <h3>Air Quality Forecast — Beijing (39.90, 116.40)</h3>
+                <div class="forecast-tabs">
+                    <button class="forecast-tab active" data-days="1">24h</button>
+                    <button class="forecast-tab" data-days="3">3 Days</button>
+                    <button class="forecast-tab" data-days="5">5 Days</button>
+                    <button class="forecast-tab" data-days="7">7 Days</button>
+                </div>
+            </div>
+            <div class="forecast-chart-container">
+                <canvas id="forecast-chart"></canvas>
+                <div class="forecast-loading" id="forecast-loading">Loading forecast...</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script>
+        const API_BASE = window.location.origin;
+
+        // Dark map tiles
+        const map = L.map('map', { zoomControl: false }).setView([39.90, 116.40], 11);
+        L.control.zoom({ position: 'topright' }).addTo(map);
+
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; OpenStreetMap &copy; CARTO',
+            maxZoom: 18,
+        }).addTo(map);
+
+        let heatLayer = null;
+        let markerLayer = L.layerGroup().addTo(map);
+
+        // Dynamic color scale — interpolates within the actual data range
+        let dataMin = 0, dataMax = 100;
+
+        function pmToIntensity(pm25) {
+            // Map to 0-1 based on actual data range (with padding)
+            const range = Math.max(dataMax - dataMin, 1);
+            return Math.max(0, Math.min(1, (pm25 - dataMin) / range));
+        }
+
+        // Smooth color interpolation for continuous gradient
+        function lerpColor(a, b, t) {
+            const ah = parseInt(a.slice(1), 16), bh = parseInt(b.slice(1), 16);
+            const ar = (ah >> 16) & 0xff, ag = (ah >> 8) & 0xff, ab = ah & 0xff;
+            const br = (bh >> 16) & 0xff, bg = (bh >> 8) & 0xff, bb = bh & 0xff;
+            const rr = Math.round(ar + (br - ar) * t);
+            const rg = Math.round(ag + (bg - ag) * t);
+            const rb = Math.round(ab + (bb - ab) * t);
+            return `#${((rr << 16) | (rg << 8) | rb).toString(16).padStart(6, '0')}`;
+        }
+
+        const COLOR_STOPS = [
+            { val: 0,   color: '#22c55e' },  // green
+            { val: 12,  color: '#86efac' },  // light green
+            { val: 25,  color: '#eab308' },  // yellow
+            { val: 35,  color: '#f97316' },  // orange
+            { val: 55,  color: '#ef4444' },  // red
+            { val: 150, color: '#a855f7' },  // purple
+            { val: 250, color: '#be123c' },  // maroon
+        ];
+
+        function pmToColor(pm25) {
+            for (let i = 1; i < COLOR_STOPS.length; i++) {
+                if (pm25 <= COLOR_STOPS[i].val) {
+                    const t = (pm25 - COLOR_STOPS[i-1].val) / (COLOR_STOPS[i].val - COLOR_STOPS[i-1].val);
+                    return lerpColor(COLOR_STOPS[i-1].color, COLOR_STOPS[i].color, t);
+                }
+            }
+            return COLOR_STOPS[COLOR_STOPS.length - 1].color;
+        }
+
+        function updatePredictionTime() {
+            // Prediction is for the next hour (model predicts T+1)
+            const now = new Date();
+            const beijing = new Date(now.getTime() + (8 * 60 * 60 * 1000)); // UTC+8
+            const nextHour = new Date(beijing);
+            nextHour.setHours(nextHour.getHours() + 1, 0, 0, 0);
+
+            const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+            const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+            document.getElementById('prediction-date').textContent =
+                `${days[nextHour.getUTCDay()]}, ${nextHour.getUTCDate()} ${months[nextHour.getUTCMonth()]} ${nextHour.getUTCFullYear()}`;
+            document.getElementById('prediction-time').textContent =
+                `${String(nextHour.getUTCHours()).padStart(2, '0')}:00`;
+        }
+
+        // Update time every minute
+        updatePredictionTime();
+        setInterval(updatePredictionTime, 60 * 1000);
+
+        function pmToClass(pm25) {
+            if (pm25 <= 12) return 'aqi-good';
+            if (pm25 <= 35) return 'aqi-moderate';
+            if (pm25 <= 55) return 'aqi-usg';
+            if (pm25 <= 150) return 'aqi-unhealthy';
+            if (pm25 <= 250) return 'aqi-very-unhealthy';
+            return 'aqi-hazardous';
+        }
+
+        function categoryLabel(pm25) {
+            if (pm25 <= 12) return 'Good';
+            if (pm25 <= 35) return 'Moderate';
+            if (pm25 <= 55) return 'USG';
+            if (pm25 <= 150) return 'Unhealthy';
+            if (pm25 <= 250) return 'Very Unhealthy';
+            return 'Hazardous';
+        }
+
+        function updateSidebar(predictions) {
+            const pm25Values = predictions.map(p => p.pm25);
+            const avg = pm25Values.reduce((a, b) => a + b, 0) / pm25Values.length;
+            const min = Math.min(...pm25Values);
+            const max = Math.max(...pm25Values);
+            const unhealthy = pm25Values.filter(v => v > 55).length;
+
+            const avgEl = document.getElementById('avg-pm25');
+            avgEl.textContent = avg.toFixed(1);
+            avgEl.className = 'stat-value ' + pmToClass(avg);
+
+            const catEl = document.getElementById('avg-category');
+            catEl.textContent = categoryLabel(avg);
+            catEl.className = 'stat-value ' + pmToClass(avg);
+
+            // AQI marker position (0-250+ mapped to 0-100%)
+            const pct = Math.min(avg / 250 * 100, 100);
+            document.getElementById('aqi-marker').style.left = pct + '%';
+
+            // Dynamic range legend
+            document.getElementById('range-min').textContent = min.toFixed(1) + ' µg/m³';
+            document.getElementById('range-max').textContent = max.toFixed(1) + ' µg/m³';
+            const gradEl = document.getElementById('dynamic-gradient');
+            gradEl.style.background = `linear-gradient(to right, ${pmToColor(min)}, ${pmToColor((min+max)/2)}, ${pmToColor(max)})`;
+        }
+
+        async function checkHealth() {
+            try {
+                const resp = await fetch(`${API_BASE}/health`);
+                const data = await resp.json();
+                document.getElementById('api-status').className = 'status-dot';
+                document.getElementById('api-status-text').textContent = 'API Online';
+                document.getElementById('model-version').textContent = data.model_version;
+            } catch {
+                document.getElementById('api-status').className = 'status-dot error';
+                document.getElementById('api-status-text').textContent = 'API Offline';
+            }
+        }
+
+        async function fetchPredictions() {
+            const bounds = map.getBounds();
+            const loading = document.getElementById('loading');
+            loading.style.display = 'block';
+
+            try {
+                const params = new URLSearchParams({
+                    lat_min: bounds.getSouth().toFixed(4),
+                    lat_max: bounds.getNorth().toFixed(4),
+                    lon_min: bounds.getWest().toFixed(4),
+                    lon_max: bounds.getEast().toFixed(4),
+                    grid_size: 15,
+                });
+
+                const response = await fetch(`${API_BASE}/predict-grid?${params}`);
+                const data = await response.json();
+
+                // Remove existing layers
+                if (heatLayer) map.removeLayer(heatLayer);
+                markerLayer.clearLayers();
+
+                // Set dynamic range for color mapping
+                const pm25Vals = data.predictions.map(p => p.pm25);
+                dataMin = Math.min(...pm25Vals);
+                dataMax = Math.max(...pm25Vals);
+                // Add 10% padding so extremes aren't at the very edge
+                const padding = (dataMax - dataMin) * 0.1 || 1;
+                dataMin = Math.max(0, dataMin - padding);
+                dataMax = dataMax + padding;
+
+                // Build dynamic gradient from actual data range
+                const steps = 10;
+                const gradient = {};
+                for (let i = 0; i <= steps; i++) {
+                    const t = i / steps;
+                    const pm = dataMin + t * (dataMax - dataMin);
+                    gradient[t] = pmToColor(pm);
+                }
+
+                // Heatmap with dynamic gradient
+                const heatData = data.predictions.map(p => [p.lat, p.lon, pmToIntensity(p.pm25)]);
+                heatLayer = L.heatLayer(heatData, {
+                    radius: 35,
+                    blur: 25,
+                    maxZoom: 15,
+                    gradient: gradient,
+                }).addTo(map);
+
+                // Circle markers
+                data.predictions.forEach(p => {
+                    L.circleMarker([p.lat, p.lon], {
+                        radius: 5,
+                        fillColor: pmToColor(p.pm25),
+                        color: 'rgba(255,255,255,0.3)',
+                        weight: 1,
+                        fillOpacity: 0.85,
+                    }).bindPopup(
+                        `<div class="popup-pm25" style="color:${pmToColor(p.pm25)}">${p.pm25} &micro;g/m&sup3;</div>` +
+                        `<div class="popup-category" style="background:${pmToColor(p.pm25)}20; color:${pmToColor(p.pm25)}">${p.aqi_category}</div>` +
+                        `<div style="margin-top:6px; color:#94a3b8; font-size:11px">${p.lat}, ${p.lon}</div>`
+                    ).addTo(markerLayer);
+                });
+
+                updateSidebar(data.predictions);
+                document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+
+            } catch (err) {
+                console.error('Failed to fetch predictions:', err);
+            } finally {
+                loading.style.display = 'none';
+            }
+        }
+
+        // Click for single prediction
+        map.on('click', async function(e) {
+            try {
+                const response = await fetch(
+                    `${API_BASE}/predict?lat=${e.latlng.lat.toFixed(4)}&lon=${e.latlng.lng.toFixed(4)}`
+                );
+                const data = await response.json();
+                const color = pmToColor(data.pm25_predicted);
+                L.popup()
+                    .setLatLng(e.latlng)
+                    .setContent(
+                        `<div class="popup-pm25" style="color:${color}">${data.pm25_predicted} &micro;g/m&sup3;</div>` +
+                        `<div class="popup-category" style="background:${color}20; color:${color}">${data.aqi_category}</div>` +
+                        `<div style="margin-top:6px; color:#94a3b8; font-size:11px">${new Date(data.timestamp).toLocaleString()}</div>`
+                    )
+                    .openOn(map);
+            } catch (err) {
+                console.error('Prediction failed:', err);
+            }
+        });
+
+        // Initial load
+        checkHealth();
+        fetchPredictions();
+
+        // Debounced fetch on map move
+        let moveTimeout;
+        map.on('moveend', () => {
+            clearTimeout(moveTimeout);
+            moveTimeout = setTimeout(fetchPredictions, 500);
+        });
+
+        // Auto-refresh every 5 minutes
+        setInterval(() => {
+            checkHealth();
+            fetchPredictions();
+        }, 5 * 60 * 1000);
+
+        // ========== FORECAST CHART ==========
+        let forecastChart = null;
+
+        // AQI background bands for the chart
+        const aqiBands = [
+            { min: 0, max: 12, color: 'rgba(34,197,94,0.08)', label: 'Good' },
+            { min: 12, max: 35, color: 'rgba(234,179,8,0.08)', label: 'Moderate' },
+            { min: 35, max: 55, color: 'rgba(249,115,22,0.08)', label: 'USG' },
+            { min: 55, max: 150, color: 'rgba(239,68,68,0.10)', label: 'Unhealthy' },
+        ];
+
+        function createAqiBandsPlugin() {
+            return {
+                id: 'aqiBands',
+                beforeDraw(chart) {
+                    const { ctx, chartArea, scales: { y } } = chart;
+                    if (!chartArea) return;
+                    const maxY = y.max;
+                    aqiBands.forEach(band => {
+                        if (band.min >= maxY) return;
+                        const top = y.getPixelForValue(Math.min(band.max, maxY));
+                        const bottom = y.getPixelForValue(band.min);
+                        ctx.fillStyle = band.color;
+                        ctx.fillRect(chartArea.left, top, chartArea.width, bottom - top);
+                    });
+                }
+            };
+        }
+
+        async function fetchForecast(days = 3) {
+            const loadingEl = document.getElementById('forecast-loading');
+            loadingEl.style.display = 'flex';
+
+            try {
+                const resp = await fetch(`${API_BASE}/forecast?lat=39.90&lon=116.40&days=${days}`);
+                const data = await resp.json();
+
+                const labels = data.predictions.map(p => {
+                    const d = new Date(p.timestamp);
+                    return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', hour12: false });
+                });
+                const pm25Data = data.predictions.map(p => p.pm25);
+                const tempData = data.predictions.map(p => p.temperature);
+                const colors = data.predictions.map(p => pmToColor(p.pm25));
+
+                if (forecastChart) forecastChart.destroy();
+
+                const ctx = document.getElementById('forecast-chart').getContext('2d');
+                forecastChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels,
+                        datasets: [
+                            {
+                                label: 'PM2.5 (µg/m³)',
+                                data: pm25Data,
+                                borderColor: '#38bdf8',
+                                backgroundColor: 'rgba(56,189,248,0.1)',
+                                borderWidth: 2,
+                                fill: true,
+                                tension: 0.3,
+                                pointRadius: 0,
+                                pointHitRadius: 10,
+                                yAxisID: 'y',
+                            },
+                            {
+                                label: 'Temperature (°C)',
+                                data: tempData,
+                                borderColor: '#f97316',
+                                borderWidth: 1.5,
+                                borderDash: [4, 4],
+                                fill: false,
+                                tension: 0.3,
+                                pointRadius: 0,
+                                pointHitRadius: 10,
+                                yAxisID: 'y1',
+                            }
+                        ],
+                    },
+                    plugins: [createAqiBandsPlugin()],
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: {
+                            mode: 'index',
+                            intersect: false,
+                        },
+                        plugins: {
+                            legend: {
+                                display: true,
+                                position: 'top',
+                                align: 'end',
+                                labels: { color: '#94a3b8', font: { size: 11 }, boxWidth: 20, padding: 12 },
+                            },
+                            tooltip: {
+                                backgroundColor: '#1e293b',
+                                titleColor: '#f1f5f9',
+                                bodyColor: '#cbd5e1',
+                                borderColor: '#334155',
+                                borderWidth: 1,
+                                padding: 10,
+                                callbacks: {
+                                    afterBody(items) {
+                                        const idx = items[0].dataIndex;
+                                        const pm = pm25Data[idx];
+                                        return `AQI: ${categoryLabel(pm)}`;
+                                    }
+                                }
+                            },
+                        },
+                        scales: {
+                            x: {
+                                ticks: {
+                                    color: '#64748b',
+                                    font: { size: 10 },
+                                    maxTicksLimit: days <= 1 ? 12 : days <= 3 ? 18 : 14,
+                                    maxRotation: 0,
+                                },
+                                grid: { color: 'rgba(51,65,85,0.3)' },
+                            },
+                            y: {
+                                position: 'left',
+                                title: { display: true, text: 'PM2.5 (µg/m³)', color: '#38bdf8', font: { size: 11 } },
+                                ticks: { color: '#64748b', font: { size: 10 } },
+                                grid: { color: 'rgba(51,65,85,0.3)' },
+                                min: 0,
+                            },
+                            y1: {
+                                position: 'right',
+                                title: { display: true, text: 'Temp (°C)', color: '#f97316', font: { size: 11 } },
+                                ticks: { color: '#64748b', font: { size: 10 } },
+                                grid: { drawOnChartArea: false },
+                            },
+                        },
+                    },
+                });
+
+            } catch (err) {
+                console.error('Forecast failed:', err);
+            } finally {
+                loadingEl.style.display = 'none';
+            }
+        }
+
+        // Forecast tab click handlers
+        document.querySelectorAll('.forecast-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.forecast-tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                fetchForecast(parseInt(tab.dataset.days));
+            });
+        });
+
+        // Load default 3-day forecast
+        fetchForecast(3);
+    </script>
+</body>
+</html>
